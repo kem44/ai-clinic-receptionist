@@ -1,30 +1,11 @@
-import gspread
-from google.oauth2.service_account import Credentials
 from datetime import datetime, timedelta
-import uuid
+from models import Appointment
+from database import get_db
 
 
-# -------------------------
-# SHEET CONNECTION
-# -------------------------
-def connect_sheet():
-    SCOPES = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive"
-    ]
 
-    creds = Credentials.from_service_account_file(
-        "credentials.json",
-        scopes=SCOPES
-    )
-
-    client = gspread.authorize(creds)
-    return client.open("CarePlus_Appointments").sheet1
-
-
-# -------------------------
 # DATE NORMALIZER
-# -------------------------
+
 def normalize_date(date_text):
     if not date_text:
         return None
@@ -40,9 +21,8 @@ def normalize_date(date_text):
     return str(date_text).strip()
 
 
-# -------------------------
-# TIME NORMALIZER (IMPORTANT)
-# -------------------------
+# TIME NORMALIZER  
+
 def normalize_time(time_text):
     if not time_text:
         return None
@@ -63,31 +43,10 @@ def normalize_time(time_text):
     return mapping.get(text, str(time_text).strip())
 
 
-# -------------------------
-# SLOT CHECK
-# -------------------------
-def slot_available(sheet, doctor, date, time):
-    records = sheet.get_all_records()
-
-    doctor = str(doctor).strip()
-    date = str(date).strip()
-    time = str(time).strip()
-
-    for record in records:
-        if (
-            str(record.get("doctor_name", "")).strip() == doctor
-            and str(record.get("appointment_date", "")).strip() == date
-            and str(record.get("appointment_time", "")).strip() == time
-            and str(record.get("booking_status", "")).strip() == "CONFIRMED"
-        ):
-            return False
-
-    return True
 
 
-# -------------------------
 # BOOK APPOINTMENT
-# -------------------------
+
 def book_appointment(
     patient_name,
     patient_phone,
@@ -96,165 +55,206 @@ def book_appointment(
     appointment_date,
     appointment_time
 ):
-    
-    print("patient_name =", patient_name)
-    print("patient_phone =", patient_phone)
-    print("patient_email =", patient_email)
-    print("doctor_name =", doctor_name)
-    print("appointment_date =", appointment_date)
-    print("appointment_time =", appointment_time)
+    print("=" * 50)
+    print("patient_name:", repr(patient_name))
+    print("patient_phone:", repr(patient_phone))
+    print("patient_email:", repr(patient_email))
+    print("doctor_name:", repr(doctor_name))
+    print("appointment_date:", repr(appointment_date))
+    print("appointment_time:", repr(appointment_time))
+    print("=" * 50)
+
+    if not all([patient_name, patient_phone, doctor_name, appointment_date, appointment_time]):
+        return False, "Missing required booking details"
+
+    appointment_date = normalize_date(appointment_date)
+    appointment_time = normalize_time(appointment_time)
+
+    if not appointment_date or not appointment_time:
+        return False, "Invalid date or time"
+
+    db = get_db()
+
     try:
-        # ---------------- VALIDATION ----------------
-        if not all([patient_name, patient_phone, doctor_name, appointment_date, appointment_time]):
-            return False, "Missing required booking details"
+        slots = available_slots(doctor_name, appointment_date)
 
-        sheet = connect_sheet()
+        if appointment_time not in slots:
+            return False, "Requested slot is unavailable"
+        
+        
+        appointment = Appointment(
+            patient_name=str(patient_name).strip(),
+            patient_phone=str(patient_phone).strip(),
+            patient_email=str(patient_email or "").strip(),
+            doctor_name=str(doctor_name).strip(),
+            appointment_date=appointment_date,
+            appointment_time=appointment_time,
+            booking_status="CONFIRMED"
+        )
 
-        # ---------------- NORMALIZATION ----------------
-        appointment_date = normalize_date(appointment_date)
-        appointment_time = normalize_time(appointment_time)
-
-        if not appointment_date or not appointment_time:
-            return False, "Invalid date or time"
-
-        # ---------------- SLOT CHECK ----------------
-        if not slot_available(sheet, doctor_name, appointment_date, appointment_time):
-            return False, "Selected slot is unavailable"
-
-        # ---------------- INSERT ----------------
-        sheet.append_row([
-            str(uuid.uuid4())[:8],
-            str(patient_name).strip(),
-            str(patient_phone).strip(),
-            str(patient_email or "").strip(),
-            str(doctor_name).strip(),
-            appointment_date,
-            appointment_time,
-            "CONFIRMED",
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        ])
+        db.add(appointment)
+        db.commit()
 
         return True, "Appointment booked successfully"
 
     except Exception as e:
-        print("BOOK ERROR:", str(e))
+        db.rollback()
+        print("BOOK ERROR:", e)
         return False, "Booking failed"
 
+    finally:
+        db.close()
 
-# -------------------------
+
 # CANCEL APPOINTMENT
-# -------------------------
 def cancel_appointment(patient_name, patient_phone):
+    db = get_db()
     try:
-        sheet = connect_sheet()
-        records = sheet.get_all_records()
+        appointment = ( 
+            db.query(Appointment)
+            .filter(
+                Appointment.patient_name == str(patient_name).strip(),
+                Appointment.patient_phone == str(patient_phone).strip(),
+                Appointment.booking_status == "CONFIRMED"
+            )
+            .first()
+        )
 
-        for index, record in enumerate(records, start=2):
+        if not appointment:
+            return False, "No appointment found"
+        
+        appointment.booking_status = "CANCELLED"
 
-            if (
-                str(record.get("patient_name", "")).strip() == str(patient_name).strip()
-                and str(record.get("patient_phone", "")).strip() == str(patient_phone).strip()
-                and str(record.get("booking_status", "")).strip() == "CONFIRMED"
-            ):
-                sheet.update_cell(index, 8, "CANCELLED")
-                return True, "Appointment cancelled successfully"
-
-        return False, "No appointment found"
+        db.commit()
+        
+        return True, "Appointment cancelled sucessfully"
+    
 
     except Exception as e:
+        db.rollback()
         print("CANCEL ERROR:", str(e))
         return False, "Cancellation failed"
+    
+    finally:
+        db.close()
 
 
-# -------------------------
 # RESCHEDULE
-# -------------------------
 def reschedule_appointment(patient_name, patient_phone, new_date, new_time):
-    try:
-        sheet = connect_sheet()
+    db = get_db()
 
+    try:
         new_date = normalize_date(new_date)
         new_time = normalize_time(new_time)
 
-        records = sheet.get_all_records()
+        appointment = (
+            db.query(Appointment)
+            .filter(
+                Appointment.patient_name == str(patient_name).strip(),
+                Appointment.patient_phone == str(patient_phone).strip(),
+                Appointment.booking_status == "CONFIRMED"
+            )
+            .first()
+        )
 
-        for index, record in enumerate(records, start=2):
+        if not appointment:
+            return False, "No appointment found"
+        
+        slots = available_slots(
+            appointment.doctor_name,
+            new_date
+        )
 
-            if (
-                str(record.get("patient_name", "")).strip() == str(patient_name).strip()
-                and str(record.get("patient_phone", "")).strip() == str(patient_phone).strip()
-                and str(record.get("booking_status", "")).strip() == "CONFIRMED"
-            ):
-                doctor = record.get("doctor_name")
+        if new_time not in slots:
+            return False, "Requessted slot is unavailable"
+        
+        appointment.appointment_date = new_date
+        appointment.appointment_time = new_time
 
-                if not slot_available(sheet, doctor, new_date, new_time):
-                    return False, "Requested slot is unavailable"
+        db.commit()
 
-                sheet.update_cell(index, 6, new_date)
-                sheet.update_cell(index, 7, new_time)
+        return True, "Appointment rescheduled successfully"
 
-                return True, "Appointment rescheduled successfully"
-
-        return False, "No appointment found"
 
     except Exception as e:
+        db.rollback()
         print("RESCHEDULE ERROR:", str(e))
         return False, "Reschedule failed"
+    
+    finally:
+        db.close()
 
 
-# -------------------------
 # FIND APPOINTMENT
-# -------------------------
+
 def find_appointment(patient_name, patient_phone):
+    db =get_db()
+    
     try:
-        sheet = connect_sheet()
-        records = sheet.get_all_records()
+        appointment = (
+            db.query(Appointment)
+            .filter(
+                Appointment.patient_name == str(patient_name).strip(),
+                Appointment.patient_phone == str(patient_phone).strip(),
+                Appointment.booking_status == "CONFIRMED"
+            )
+            .first()
+        )
 
-        for record in records:
-            if (
-                str(record.get("patient_name", "")).strip() == str(patient_name).strip()
-                and str(record.get("patient_phone", "")).strip() == str(patient_phone).strip()
-                and str(record.get("booking_status", "")).strip() == "CONFIRMED"
-            ):
-                return True, {
-                    "doctor_name": record.get("doctor_name"),
-                    "appointment_date": record.get("appointment_date"),
-                    "appointment_time": record.get("appointment_time"),
-                    "booking_status": record.get("booking_status")
-                }
-
-        return False, "No appointment found"
-
+        if not appointment:
+            return False, "No appointments found"
+        return True, {
+            "doctor_name": appointment.doctor_name,
+            "appointment_date": appointment.appointment_date,
+            "appointment_time": appointment.appointment_time,
+            "booking_status": appointment.booking_status
+        }
+    
     except Exception as e:
-        print("FIND ERROR:", str(e))
+        print("FIND ERROR:", e)
         return False, "Lookup failed"
+    
+    finally:
+        db.close()
 
 
-# -------------------------
 # AVAILABLE SLOTS
-# -------------------------
+
 def available_slots(doctor_name, appointment_date):
     try:
-        all_slots = ["9 AM", "10 AM", "11 AM", "12 PM", "2 PM", "3 PM", "4 PM", "5 PM"]
+        appointment_date = normalize_date(appointment_date)
 
-        sheet = connect_sheet()
-        records = sheet.get_all_records()
+        all_slots = [
+            "9 AM",
+            "10 AM",
+            "11 AM",
+            "12 PM",
+            "2 PM",
+            "3 PM",
+            "4 PM",
+            "5 PM"
+        ]
 
-        doctor_name = str(doctor_name).strip()
-        appointment_date = str(appointment_date).strip()
+        db = get_db()
+        
+        booked = (
+            db.query(Appointment)
+            .filter(
+                Appointment.doctor_name == doctor_name,
+                Appointment.appointment_date == appointment_date,
+                Appointment.booking_status == "CONFIRMED"
+            )
+            .all()
+        )
 
-        booked_slots = []
-
-        for record in records:
-            if (
-                str(record.get("doctor_name", "")).strip() == doctor_name
-                and str(record.get("appointment_date", "")).strip() == appointment_date
-                and str(record.get("booking_status", "")).strip() == "CONFIRMED"
-            ):
-                booked_slots.append(record.get("appointment_time"))
+        booked_slots = [a.appointment_time for a in booked]
 
         return [slot for slot in all_slots if slot not in booked_slots]
 
     except Exception as e:
-        print("SLOTS ERROR:", str(e))
-        return []
+        print("SLOT ERROR:", e)
+        return[]
+    
+    finally:
+        db.close()
+

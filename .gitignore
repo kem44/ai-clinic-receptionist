@@ -1,5 +1,30 @@
-.venv/
+# Python
 __pycache__/
-*.pyc
-credentials.json
+*.py[cod]
+*.pyo
+
+# Virtual Environment
+venv/
+.venv/
+env/
+
+# Environment Variables
 .env
+
+# IDE
+.vscode/
+.idea/
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# Python Cache
+.pytest_cache/
+.mypy_cache/
+
+# Logs
+*.log
+
+# Json credentials
+credentials.json

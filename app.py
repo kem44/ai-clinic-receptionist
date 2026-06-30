@@ -16,9 +16,8 @@ def home():
     return "Clinic Receptionist API Running"
 
 
-# -------------------------
 # BOOK APPOINTMENT
-# -------------------------
+
 @app.route("/book-appointment", methods=["POST"])
 def create_appointment():
 
@@ -27,9 +26,9 @@ def create_appointment():
 
         print("\nBOOK APPOINTMENT REQUEST")
         print(data)
-
-        args = data.get("args", {}).get("args", {})
-
+        
+        args = data.get("args", {}).get("args", {}).get("args", {})
+        
         success, message = book_appointment(
             patient_name=args.get("patient_name"),
             patient_phone=args.get("patient_phone"),
@@ -54,9 +53,9 @@ def create_appointment():
         }), 500
 
 
-# -------------------------
+
 # CANCEL APPOINTMENT
-# -------------------------
+
 @app.route("/cancel-appointment", methods=["POST"])
 def cancel_booking():
 
@@ -84,9 +83,9 @@ def cancel_booking():
         }), 500
 
 
-# -------------------------
+
 # RESCHEDULE
-# -------------------------
+
 @app.route("/reschedule-appointment", methods=["POST"])
 def reschedule_booking():
 
@@ -116,9 +115,9 @@ def reschedule_booking():
         }), 500
 
 
-# -------------------------
+
 # FIND APPOINTMENT
-# -------------------------
+
 @app.route("/find-appointment", methods=["POST"])
 def lookup_appointment():
 
@@ -145,9 +144,9 @@ def lookup_appointment():
         }), 500
 
 
-# -------------------------
+
 # AVAILABLE SLOTS
-# -------------------------
+
 @app.route("/available-slots", methods=["POST"])
 def get_available_slots():
 
@@ -174,9 +173,9 @@ def get_available_slots():
         }), 500
 
 
-# -------------------------
+
 # WEBHOOK
-# -------------------------
+
 @app.route("/booking-webhook", methods=["POST"])
 def booking_webhook():
 
@@ -190,8 +189,7 @@ def booking_webhook():
     })
 
 
-# -------------------------
 # RUN
-# -------------------------
+
 if __name__ == "__main__":
     app.run(debug=True)
